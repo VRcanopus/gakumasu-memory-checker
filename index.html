@@ -134,18 +134,36 @@
 
     // ── 分配パターン生成 ──────────────────────────────
     // poolCards: [{rarityId, enhanced, cost, count}, ...]
-    // 戻り値: { distributions: 分配パターン配列, capped: 上限到達フラグ }
-    function generateDistributions(poolCards, numSets, cap) {
+    // 戻り値: { distributions: ユニーク分配パターン配列, capped: 上限到達フラグ }
+    function generateDistributions(poolCards, sets, cap) {
+      const numSets = sets.length;
       const results = [];
       let capped = false;
+      const seen = new Set();
+
+      const toSetKey = (fixedCards, i) => {
+        const rankId = sets[i].rankId;
+        const cardsKey = [...fixedCards]
+          .sort((a, b) => {
+            const ka = a.rarityId + a.enhanced;
+            const kb = b.rarityId + b.enhanced;
+            return ka < kb ? -1 : ka > kb ? 1 : 0;
+          })
+          .map((c) => `${c.rarityId}${c.enhanced ? "+" : "-"}`)
+          .join(",");
+        return `${rankId}:${cardsKey}`;
+      };
 
       function rec(cardIdx, dist) {
         if (capped) return;
         if (cardIdx === poolCards.length) {
+          const key = dist.map((fixedCards, i) => toSetKey(fixedCards, i)).sort().join("|");
+          if (seen.has(key)) return;
           if (results.length >= cap) {
             capped = true;
             return;
           }
+          seen.add(key);
           results.push(dist.map((s) => [...s]));
           return;
         }
@@ -175,29 +193,6 @@
 
       rec(0, Array.from({ length: numSets }, () => []));
       return { distributions: results, capped };
-    }
-
-    // ── セット入れ替わり重複の除去 ────────────────────
-    function deduplicateDistributions(distributions, sets) {
-      const seen = new Set();
-      return distributions.filter((dist) => {
-        const setKeys = dist.map((fixedCards, i) => {
-          const rankId = sets[i].rankId;
-          const cardsKey = [...fixedCards]
-            .sort((a, b) => {
-              const ka = a.rarityId + a.enhanced;
-              const kb = b.rarityId + b.enhanced;
-              return ka < kb ? -1 : ka > kb ? 1 : 0;
-            })
-            .map((c) => `${c.rarityId}${c.enhanced ? "+" : "-"}`)
-            .join(",");
-          return `${rankId}:${cardsKey}`;
-        });
-        const key = [...setKeys].sort().join("|");
-        if (seen.has(key)) return false;
-        seen.add(key);
-        return true;
-      });
     }
 
     function CardBadge({ rarityId, enhanced, cost, dim, small }) {
@@ -395,11 +390,8 @@
           count: p.count,
         }));
 
-        const generated = generateDistributions(poolCards, sets.length, DIST_CAP);
-        const distributions = deduplicateDistributions(
-          generated.distributions,
-          sets
-        );
+        const generated = generateDistributions(poolCards, sets, DIST_CAP);
+        const distributions = generated.distributions;
         const capped = generated.capped;
 
         const ranked = distributions.map((dist) => {

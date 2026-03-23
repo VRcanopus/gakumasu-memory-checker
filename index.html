@@ -140,11 +140,12 @@
       let capped = false;
 
       function rec(cardIdx, dist) {
-        if (results.length >= cap) {
-          capped = true;
-          return;
-        }
+        if (capped) return;
         if (cardIdx === poolCards.length) {
+          if (results.length >= cap) {
+            capped = true;
+            return;
+          }
           results.push(dist.map((s) => [...s]));
           return;
         }
@@ -153,10 +154,7 @@
         const isSupport = card.rarityId === "support";
 
         function distCard(remaining, setIdx, d) {
-          if (results.length >= cap) {
-            capped = true;
-            return;
-          }
+          if (capped) return;
           if (setIdx === numSets) {
             if (remaining === 0) rec(cardIdx + 1, d);
             return;
@@ -168,6 +166,7 @@
           for (let take = 0; take <= maxTake; take++) {
             const newSet = [...d[setIdx], ...Array(take).fill(obj)];
             distCard(remaining - take, setIdx + 1, d.map((s, i) => i === setIdx ? newSet : s));
+            if (capped) return;
           }
         }
 
@@ -401,7 +400,7 @@
           generated.distributions,
           sets
         );
-        const capped = generated.capped || generated.distributions.length >= DIST_CAP;
+        const capped = generated.capped;
 
         const ranked = distributions.map((dist) => {
           const setEvals = sets.map((set, i) => {

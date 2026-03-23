@@ -3,42 +3,25 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>コンテストメモリー 確定抽選チェッカー</title>
+  <title>コンテストメモリー 振り分け最適化チェッカー</title>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&display=swap" rel="stylesheet">
-  <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { background: #0f0a1e; }
-    button { cursor: pointer; }
-    select { cursor: pointer; }
-    .rank-btn { transition: all 0.15s; }
-    .rank-btn:hover { transform: translateY(-1px); }
-    .slot-card { transition: border-color 0.2s; }
-    .slot-card:hover { border-color: rgba(168,85,247,0.4) !important; }
-    .combo-row:hover { background: rgba(168,85,247,0.07) !important; }
-    ::-webkit-scrollbar { width: 4px; }
-    ::-webkit-scrollbar-track { background: rgba(255,255,255,0.05); }
-    ::-webkit-scrollbar-thumb { background: rgba(168,85,247,0.4); border-radius: 2px; }
-    select option:disabled { color: #504060; }
-  </style>
 </head>
 <body>
   <div id="root"></div>
   <script type="text/babel">
     const { useState, useMemo } = React;
 
+    // ── 定数 ───────────────────────────────────────────
     const RARITIES = [
-      { id: "support",     label: "サポカ",  sublabel: "SR・SSR共通", base: 96,  enh: 126 },
-      { id: "ssr",         label: "虹",      sublabel: "SSR",          base: 150, enh: 204 },
-      { id: "high_gold",   label: "高金",    sublabel: "Plv3以上 SR", base: 105, enh: 141 },
-      { id: "low_gold",    label: "低金",    sublabel: "Plv2以下 SR", base: 75,  enh: 102 },
-      { id: "high_silver", label: "高銀",    sublabel: "Plv3以上 R",  base: 45,  enh: 60  },
-      { id: "low_silver",  label: "低銀",    sublabel: "Plv2以下 R",  base: 30,  enh: 39  },
+      { id: "support",     label: "サポカ",  sublabel: "SR・SSR共通",  base: 96,  enh: 126 },
+      { id: "ssr",         label: "虹",      sublabel: "SSR",           base: 150, enh: 204 },
+      { id: "high_gold",   label: "高金",    sublabel: "Plv3以上 SR",  base: 105, enh: 141 },
+      { id: "low_gold",    label: "低金",    sublabel: "Plv2以下 SR",  base: 75,  enh: 102 },
+      { id: "high_silver", label: "高銀",    sublabel: "Plv3以上 R",   base: 45,  enh: 60  },
+      { id: "low_silver",  label: "低銀",    sublabel: "Plv2以下 R",   base: 30,  enh: 39  },
     ];
-
     const RANKS = [
       { id: "B",   label: "B",   min: 306, max: 363 },
       { id: "B+",  label: "B+",  min: 306, max: 423 },
@@ -51,444 +34,637 @@
       { id: "SSS", label: "SSS", min: 546, max: 858, note: "観測値" },
     ];
 
-    const CARD_OPTIONS = RARITIES.flatMap((r) => [
-      { rarityId: r.id, label: r.label, enhanced: true,  cost: r.enh  },
-      { rarityId: r.id, label: r.label, enhanced: false, cost: r.base },
-    ]);
+    // 自由枠の候補：サポカ除く全レアリティ、強化+ を先に
+    const FREE_OPTIONS = RARITIES
+      .filter((r) => r.id !== "support")
+      .flatMap((r) => [
+        { rarityId: r.id, label: r.label, enhanced: true,  cost: r.enh  },
+        { rarityId: r.id, label: r.label, enhanced: false, cost: r.base },
+      ]);
+
+    const MAX_SETS = 5;
+    const DIST_CAP  = 3000; // 探索上限
+    const RESULT_PREVIEW = 10;
 
     const getRarity = (id) => RARITIES.find((r) => r.id === id);
-    const getCost = (rarityId, enhanced) => {
+    const getCost   = (rarityId, enhanced) => {
       const r = getRarity(rarityId);
       return r ? (enhanced ? r.enh : r.base) : 0;
     };
 
     const rarityColor = {
-      low_silver:  { bg: "#9ca3af", solid: "#9ca3af", border: "#6b7280" },
-      high_silver: { bg: "#94a3b8", solid: "#94a3b8", border: "#64748b" },
-      low_gold:    { bg: "#d97706", solid: "#d97706", border: "#b45309" },
-      high_gold:   { bg: "#f59e0b", solid: "#f59e0b", border: "#d97706" },
-      ssr:         { bg: "linear-gradient(135deg,#a855f7,#ec4899)", solid: "#a855f7", border: "#a855f7" },
-      support:     { bg: "linear-gradient(135deg,#06b6d4,#3b82f6)", solid: "#06b6d4", border: "#06b6d4" },
+      low_silver:  { solid: "#9ca3af", border: "#6b7280" },
+      high_silver: { solid: "#94a3b8", border: "#64748b" },
+      low_gold:    { solid: "#d97706", border: "#b45309" },
+      high_gold:   { solid: "#f59e0b", border: "#d97706" },
+      ssr:         { solid: "#a855f7", border: "#a855f7" },
+      support:     { solid: "#06b6d4", border: "#06b6d4" },
     };
 
+    // ── 重複組み合わせ生成 ─────────────────────────────
     function getCombosWithRepeat(options, n) {
       const results = [];
-      function rec(start, current) {
-        if (current.length === n) { results.push([...current]); return; }
+      function rec(start, cur) {
+        if (cur.length === n) { results.push([...cur]); return; }
         for (let i = start; i < options.length; i++) {
-          current.push(options[i]);
-          rec(i, current);
-          current.pop();
+          cur.push(options[i]);
+          rec(i, cur);
+          cur.pop();
         }
       }
       rec(0, []);
       return results;
     }
 
-    const SLOT_LIMIT = 5;
-    const COMBO_PREVIEW = 20;
-
-    function MemoryChecker() {
-      const [rankId, setRankId] = useState("SS");
-      const [slots, setSlots] = useState([
-        { id: 1, rarityId: "ssr",        enhanced: false },
-        { id: 2, rarityId: "low_silver", enhanced: false },
-      ]);
-      const [nextId, setNextId] = useState(3);
-      const [showAllCombos, setShowAllCombos] = useState(false);
-      const [expandedComboIdx, setExpandedComboIdx] = useState(null);
-      const [prioritizeSafe, setPrioritizeSafe] = useState(true);
-
-      const rank = RANKS.find((r) => r.id === rankId);
-      const hasFixedSupport = slots.some((s) => s.rarityId === "support");
-
-      const addSlot = () => {
-        if (slots.length >= SLOT_LIMIT) return;
-        setSlots([...slots, { id: nextId, rarityId: "low_silver", enhanced: false }]);
-        setNextId(nextId + 1);
-      };
-      const removeSlot = (id) => setSlots(slots.filter((s) => s.id !== id));
-      const updateSlot = (id, updates) =>
-        setSlots((prev) => prev.map((s) => (s.id === id ? { ...s, ...updates } : s)));
-      const canSelectSupport = (currentSlotId) =>
-        !slots.some((s) => s.id !== currentSlotId && s.rarityId === "support");
-
-      const analysis = useMemo(() => {
-        const fixedSlots = slots;
-        const freeCount = SLOT_LIMIT - slots.length;
-        const fixedCosts = fixedSlots.map((s) => getCost(s.rarityId, s.enhanced));
-        const fixedTotal = fixedCosts.reduce((a, b) => a + b, 0);
-        const supportInFixed = fixedSlots.some((s) => s.rarityId === "support");
-        const freeOptions = supportInFixed
-          ? CARD_OPTIONS.filter((c) => c.rarityId !== "support")
-          : CARD_OPTIONS;
-
-        if (freeCount === 0) {
-          const inRange = fixedTotal >= rank.min && fixedTotal <= rank.max;
-          const minCost = fixedCosts.length > 0 ? Math.min(...fixedCosts) : 0;
-          const yoyoCost = rank.min - (fixedTotal - minCost);
-          const cardSafety = freeOptions.map((opt) => {
-            let dangerous = false;
-            for (const c of fixedCosts) {
-              const newTotal = fixedTotal - c + opt.cost;
-              if (newTotal >= rank.min && newTotal <= rank.max) { dangerous = true; break; }
-            }
-            return { ...opt, dangerous };
+    // ── 自由枠コンボキャッシュ ────────────────────────
+    const _validCache = new Map();
+    function getValidFreeCombos(rank, freeCount, fixedCost) {
+      if (freeCount < 0) return [];
+      const key = `${rank.id}|${freeCount}|${fixedCost}`;
+      if (_validCache.has(key)) return _validCache.get(key);
+      const combos = freeCount === 0
+        ? (fixedCost >= rank.min && fixedCost <= rank.max ? [[]] : [])
+        : getCombosWithRepeat(FREE_OPTIONS, freeCount).filter((combo) => {
+            const total = fixedCost + combo.reduce((s, c) => s + c.cost, 0);
+            return total >= rank.min && total <= rank.max;
           });
-          return { fixedTotal, freeCount, inRange,
-            tooLow: fixedTotal < rank.min, tooHigh: fixedTotal > rank.max,
-            yoyoCost, minCost, cardSafety, freeCombos: [] };
+      _validCache.set(key, combos);
+      return combos;
+    }
+
+    // ── 取り放題計算 ──────────────────────────────────
+    function computeSafeCards(allCosts, total, rank) {
+      return FREE_OPTIONS.filter((opt) => {
+        for (const c of allCosts) {
+          const newTotal = total - c + opt.cost;
+          if (newTotal >= rank.min && newTotal <= rank.max) return false;
+        }
+        return true;
+      });
+    }
+
+    // ── 1セット評価（全有効コンボを返す）────────────────
+    function evaluateSet(fixedCards, rank) {
+      const fixedCosts = fixedCards.map((c) => c.cost);
+      const fixedCost  = fixedCosts.reduce((s, c) => s + c, 0);
+      const freeCount  = 5 - fixedCards.length;
+
+      const validCombos = getValidFreeCombos(rank, freeCount, fixedCost);
+      if (validCombos.length === 0) return { valid: false, combos: [] };
+
+      const combos = validCombos.map((freeCombo) => {
+        const freeCosts = freeCombo.map((c) => c.cost);
+        const allCosts  = [...fixedCosts, ...freeCosts];
+        const total     = fixedCost + freeCosts.reduce((s, c) => s + c, 0);
+        const safeCards = computeSafeCards(allCosts, total, rank);
+        const lowGoldCount = fixedCards.filter((c) => c.rarityId === "low_gold").length
+                          + freeCombo.filter((c) => c.rarityId === "low_gold").length;
+        return { freeCombo, total, safeCards, hasSafe: safeCards.length > 0, grayed: lowGoldCount > 1 };
+      }).sort((a, b) => {
+        const as = a.hasSafe ? 1 : 0;
+        const bs = b.hasSafe ? 1 : 0;
+        if (bs !== as) return bs - as;
+        return b.total - a.total;
+      });
+
+      const hasSafe = combos[0]?.hasSafe ?? false;
+      const best    = combos[0] ?? null;
+      return { valid: true, hasSafe, best, combos };
+    }
+
+    // ── 分配パターン生成 ──────────────────────────────
+    // poolCards: [{rarityId, enhanced, cost, count}, ...]
+    // 戻り値: 各分配パターン（各セットのカード配列の配列）
+    function generateDistributions(poolCards, numSets, cap) {
+      const results = [];
+
+      function rec(cardIdx, dist) {
+        if (results.length >= cap) return;
+        if (cardIdx === poolCards.length) {
+          results.push(dist.map((s) => [...s]));
+          return;
+        }
+        const card = poolCards[cardIdx];
+        const obj  = { rarityId: card.rarityId, enhanced: card.enhanced, cost: card.cost };
+        const isSupport = card.rarityId === "support";
+
+        function distCard(remaining, setIdx, d) {
+          if (results.length >= cap) return;
+          if (setIdx === numSets) {
+            if (remaining === 0) rec(cardIdx + 1, d);
+            return;
+          }
+          const slotsLeft   = 5 - d[setIdx].length;
+          const supportFull = isSupport && d[setIdx].some((c) => c.rarityId === "support");
+          const maxTake     = supportFull ? 0 : Math.min(remaining, slotsLeft, isSupport ? 1 : Infinity);
+
+          for (let take = 0; take <= maxTake; take++) {
+            const newSet = [...d[setIdx], ...Array(take).fill(obj)];
+            distCard(remaining - take, setIdx + 1, d.map((s, i) => i === setIdx ? newSet : s));
+          }
         }
 
-        const allCombos = getCombosWithRepeat(freeOptions, freeCount);
-        const validCombos = allCombos
-          .filter((combo) => {
-            const supportCount = (supportInFixed ? 1 : 0) +
-              combo.filter((c) => c.rarityId === "support").length;
-            if (supportCount > 1) return false;
-            const total = fixedTotal + combo.reduce((s, c) => s + c.cost, 0);
-            return total >= rank.min && total <= rank.max;
-          })
-          .map((combo) => {
-            const comboSum = combo.reduce((s, c) => s + c.cost, 0);
-            const total = fixedTotal + comboSum;
-            const allCosts = [...fixedCosts, ...combo.map((c) => c.cost)];
-            const safeCards = CARD_OPTIONS.filter((opt) => {
-              const comboHasSupport = supportInFixed || combo.some((c) => c.rarityId === "support");
-              if (opt.rarityId === "support" && comboHasSupport) return false;
-              for (const c of allCosts) {
-                const newTotal = total - c + opt.cost;
-                if (newTotal >= rank.min && newTotal <= rank.max) return false;
-              }
-              return true;
-            });
-            const fixedLowGoldCount = fixedSlots.filter((s) => s.rarityId === "low_gold").length;
-            const comboLowGoldCount = combo.filter((c) => c.rarityId === "low_gold").length;
-            const grayed = fixedLowGoldCount + comboLowGoldCount > 1;
-            return { cards: combo, comboSum, total, safeCards, grayed };
-          })
-          .sort((a, b) => b.total - a.total);
+        distCard(card.count, 0, dist);
+      }
 
-        return { fixedTotal, freeCount, inRange: false, freeCombos: validCombos, cardSafety: [] };
-      }, [slots, rank]);
+      rec(0, Array.from({ length: numSets }, () => []));
+      return results;
+    }
 
-      const sortedCombos = useMemo(() => {
-        if (!prioritizeSafe) return analysis.freeCombos;
-        return [...analysis.freeCombos].sort((a, b) => {
-          const aSafe = a.safeCards.length > 0 ? 1 : 0;
-          const bSafe = b.safeCards.length > 0 ? 1 : 0;
-          if (bSafe !== aSafe) return bSafe - aSafe;
-          return b.total - a.total;
+    // ── セット入れ替わり重複の除去 ────────────────────
+    function deduplicateDistributions(distributions, sets) {
+      const seen = new Set();
+      return distributions.filter((dist) => {
+        const setKeys = dist.map((fixedCards, i) => {
+          const rankId = sets[i].rankId;
+          const cardsKey = [...fixedCards]
+            .sort((a, b) => {
+              const ka = a.rarityId + a.enhanced;
+              const kb = b.rarityId + b.enhanced;
+              return ka < kb ? -1 : ka > kb ? 1 : 0;
+            })
+            .map((c) => `${c.rarityId}${c.enhanced ? "+" : "-"}`)
+            .join(",");
+          return `${rankId}:${cardsKey}`;
         });
-      }, [analysis.freeCombos, prioritizeSafe]);
+        const key = [...setKeys].sort().join("|");
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+    }
 
-      const safeCards   = analysis.cardSafety.filter((c) => !c.dangerous);
-      const dangerCards = analysis.cardSafety.filter((c) =>  c.dangerous);
-      const displayedCombos = showAllCombos ? sortedCombos : sortedCombos.slice(0, COMBO_PREVIEW);
+    function CardBadge({ rarityId, enhanced, cost, dim, small }) {
+      const col = rarityColor[rarityId] || { solid: "#6b7280", border: "#4b5563" };
+      return (
+        <span style={{
+          display: "inline-flex", alignItems: "center", gap: 3,
+          padding: small ? "2px 7px" : "3px 9px",
+          borderRadius: 14, fontSize: small ? 11 : 12, whiteSpace: "nowrap",
+          background: "rgba(0,0,0,0.3)", border: `1px solid ${col.border}60`,
+          opacity: dim ? 0.4 : 1,
+        }}>
+          <span style={{ width: 6, height: 6, borderRadius: "50%", background: col.solid, flexShrink: 0, display: "inline-block" }} />
+          <span style={{ color: "#d0c0f0" }}>{getRarity(rarityId)?.label ?? rarityId}{enhanced ? "+" : "−"}</span>
+          {cost !== undefined && <span style={{ color: "#605080", fontSize: 10 }}>{cost}</span>}
+        </span>
+      );
+    }
+
+    function comboKey(combo) {
+      return combo.freeCombo.map((c) => `${c.rarityId}${c.enhanced ? "+" : "-"}`).join(",");
+    }
+
+    function SetResultRow({ fixedCards, evalResult, rank, label }) {
+      const [expandedKey, setExpandedKey] = useState(null);
+      const [showAllCombos, setShowAllCombos] = useState(false);
+      const COMBO_PREVIEW = 15;
+
+      if (!evalResult.valid) {
+        return (
+          <div style={{ padding: "10px 14px", borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
+            <div style={{ fontSize: 12, color: "#f87171" }}>
+              ⚠️ セット{label}（{rank.label}）: コスト範囲内の組み合わせなし
+            </div>
+          </div>
+        );
+      }
+
+      const { combos, hasSafe } = evalResult;
+      const displayed = showAllCombos ? combos : combos.slice(0, COMBO_PREVIEW);
+
+      return (
+        <div style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+          <div style={{
+            display: "flex", alignItems: "center", gap: 8, padding: "8px 14px",
+            background: hasSafe ? "rgba(52,211,153,0.04)" : "rgba(255,255,255,0.02)",
+          }}>
+            <div style={{
+              width: 22, height: 22, borderRadius: 6, flexShrink: 0,
+              background: hasSafe ? "rgba(52,211,153,0.2)" : "rgba(100,100,100,0.15)",
+              border: `1px solid ${hasSafe ? "rgba(52,211,153,0.4)" : "rgba(255,255,255,0.1)"}`,
+              display: "flex", alignItems: "center", justifyContent: "center",
+              fontSize: 11, fontWeight: 700, color: hasSafe ? "#34d399" : "#7060a0",
+            }}>{label}</div>
+            <span style={{ fontSize: 12, color: "#a090c0", fontWeight: 700 }}>{rank.label}</span>
+            <span style={{ fontSize: 11, color: "#504060" }}>{rank.min}〜{rank.max}</span>
+            {fixedCards.length > 0 && (
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 3 }}>
+                {fixedCards.map((c, i) => <CardBadge key={i} rarityId={c.rarityId} enhanced={c.enhanced} cost={c.cost} small />)}
+              </div>
+            )}
+            <span style={{ fontSize: 11, color: "#6060a0", marginLeft: "auto" }}>
+              {combos.length}件
+            </span>
+          </div>
+
+          <div style={{
+            display: "flex", alignItems: "center", gap: 8, padding: "5px 14px",
+            fontSize: 10, color: "#403050",
+            borderBottom: "1px solid rgba(255,255,255,0.03)",
+          }}>
+            <div style={{ width: 18, textAlign: "right", flexShrink: 0 }}>#</div>
+            <div style={{ flex: 1, minWidth: 0 }}>自由枠の構成</div>
+            <div style={{ width: 64, textAlign: "center", flexShrink: 0 }}>取り放題</div>
+            <div style={{ width: 44, textAlign: "right", flexShrink: 0 }}>合計</div>
+            <div style={{ width: 14, flexShrink: 0 }} />
+          </div>
+
+          <div style={{ maxHeight: 280, overflowY: "auto", overflowX: "hidden" }}>
+            {displayed.map((combo, idx) => {
+              const key = comboKey(combo);
+              const isExp = expandedKey === key;
+              return (
+                <div key={key} style={{
+                  borderBottom: "1px solid rgba(255,255,255,0.025)",
+                  opacity: combo.grayed ? 0.35 : 1,
+                  background: isExp ? "rgba(168,85,247,0.07)"
+                    : idx % 2 === 0 ? "transparent" : "rgba(255,255,255,0.01)",
+                }}>
+                  <div onClick={() => setExpandedKey(isExp ? null : key)} style={{
+                    display: "flex", alignItems: "center", gap: 8,
+                    padding: "7px 14px", cursor: "pointer",
+                    width: "100%", overflow: "hidden",
+                  }}>
+                    <div style={{ width: 18, fontSize: 10, color: "#504070", flexShrink: 0, textAlign: "right" }}>{idx + 1}</div>
+                    <div style={{ flex: 1, minWidth: 0, display: "flex", flexWrap: "wrap", gap: 3 }}>
+                      {combo.freeCombo.length > 0
+                        ? combo.freeCombo.map((c, ci) => <CardBadge key={ci} rarityId={c.rarityId} enhanced={c.enhanced} cost={c.cost} small />)
+                        : <span style={{ fontSize: 11, color: "#403050" }}>（自由枠なし）</span>}
+                    </div>
+                    <div style={{
+                      flexShrink: 0, width: 64,
+                      visibility: combo.hasSafe ? "visible" : "hidden",
+                      background: "rgba(52,211,153,0.15)", border: "1px solid rgba(52,211,153,0.35)",
+                      borderRadius: 8, padding: "1px 4px",
+                      fontSize: 9, color: "#34d399", textAlign: "center", whiteSpace: "nowrap",
+                    }}>取り放題あり</div>
+                    <div style={{ width: 44, flexShrink: 0, textAlign: "right", fontSize: 12, fontWeight: 700, color: "#c0a0ff" }}>
+                      {combo.total}
+                    </div>
+                    <div style={{ width: 14, flexShrink: 0, fontSize: 10, color: "#604080", textAlign: "center" }}>
+                      {isExp ? "▲" : "▼"}
+                    </div>
+                  </div>
+                  {isExp && (
+                    <div style={{
+                      margin: "0 12px 8px", borderRadius: 8, padding: "8px 12px",
+                      border: combo.hasSafe ? "1px solid rgba(52,211,153,0.2)" : "1px solid rgba(255,255,255,0.05)",
+                      background: combo.hasSafe ? "rgba(52,211,153,0.04)" : "rgba(255,255,255,0.02)",
+                    }}>
+                      <div style={{ fontSize: 10, fontWeight: 700, marginBottom: 5,
+                        color: combo.hasSafe ? "#34d399" : "#604070" }}>
+                        {combo.hasSafe ? "✅ 取り放題カード" : "⚠️ 取り放題なし"}
+                      </div>
+                      {combo.hasSafe && (
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: 3 }}>
+                          {combo.safeCards.map((c, i) => <CardBadge key={i} rarityId={c.rarityId} enhanced={c.enhanced} cost={c.cost} small />)}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+          {combos.length > COMBO_PREVIEW && (
+            <div style={{ padding: "7px", textAlign: "center", borderTop: "1px solid rgba(255,255,255,0.03)" }}>
+              <button onClick={() => setShowAllCombos(!showAllCombos)} style={{
+                padding: "4px 16px", borderRadius: 16,
+                border: "1px solid rgba(168,85,247,0.35)",
+                background: "rgba(168,85,247,0.08)", color: "#c084fc", fontSize: 11,
+              }}>
+                {showAllCombos ? "▲ 折りたたむ" : `▼ 残り ${combos.length - COMBO_PREVIEW} 件`}
+              </button>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    function MemoryChecker() {
+      const [pool, setPool] = useState([
+        { id: 1, rarityId: "ssr",       enhanced: true,  count: 2 },
+        { id: 2, rarityId: "high_gold", enhanced: false, count: 1 },
+      ]);
+      const [poolNext, setPoolNext] = useState(3);
+
+      const [sets, setSets] = useState([
+        { id: 1, rankId: "SS" },
+        { id: 2, rankId: "SS" },
+      ]);
+      const [setsNext, setSetsNext] = useState(3);
+      const [openResultIdx, setOpenResultIdx] = useState(null);
+      const [showAll, setShowAll] = useState(false);
+
+      const addPool = () => {
+        setPool((p) => [...p, { id: poolNext, rarityId: "low_silver", enhanced: false, count: 1 }]);
+        setPoolNext((n) => n + 1);
+      };
+      const removePool = (id) => setPool((p) => p.filter((c) => c.id !== id));
+      const updatePool = (id, u) => setPool((p) => p.map((c) => c.id === id ? { ...c, ...u } : c));
+
+      const addSet = () => {
+        if (sets.length >= MAX_SETS) return;
+        setSets((s) => [...s, { id: setsNext, rankId: "SS" }]);
+        setSetsNext((n) => n + 1);
+      };
+      const removeSet = (id) => setSets((s) => s.filter((x) => x.id !== id));
+      const updateSet = (id, u) => setSets((s) => s.map((x) => x.id === id ? { ...x, ...u } : x));
+
+      const totalSpecified = pool.reduce((s, p) => s + p.count, 0);
+      const totalSlots     = sets.length * 5;
+      const totalFree      = totalSlots - totalSpecified;
+      const isInvalid      = totalSpecified > totalSlots;
+
+      const searchResult = useMemo(() => {
+        if (isInvalid || pool.length === 0 || sets.length === 0) return null;
+        _validCache.clear();
+
+        const poolCards = pool.map((p) => ({
+          rarityId: p.rarityId,
+          enhanced: p.enhanced,
+          cost: getCost(p.rarityId, p.enhanced),
+          count: p.count,
+        }));
+
+        const distributions = deduplicateDistributions(
+          generateDistributions(poolCards, sets.length, DIST_CAP),
+          sets
+        );
+        const capped = distributions.length >= DIST_CAP;
+
+        const ranked = distributions.map((dist) => {
+          const setEvals = sets.map((set, i) => {
+            const rank = RANKS.find((r) => r.id === set.rankId);
+            const fixedCards = dist[i];
+            const evalResult = evaluateSet(fixedCards, rank);
+            return { fixedCards, evalResult, rank, set };
+          });
+          const safeCount = setEvals.filter((e) => e.evalResult.hasSafe).length;
+          const validCount = setEvals.filter((e) => e.evalResult.valid).length;
+          return { dist, setEvals, safeCount, validCount };
+        });
+
+        ranked.sort((a, b) => b.safeCount - a.safeCount || b.validCount - a.validCount);
+
+        return { results: ranked, capped, total: distributions.length };
+      }, [pool, sets, isInvalid]);
+
+      const displayed = showAll
+        ? searchResult?.results
+        : searchResult?.results.slice(0, RESULT_PREVIEW);
 
       return (
         <div style={{
           minHeight: "100vh",
           background: "linear-gradient(160deg, #0f0a1e 0%, #1a0a2e 50%, #0a1428 100%)",
           fontFamily: "'Noto Sans JP', 'Hiragino Kaku Gothic Pro', sans-serif",
-          color: "#f0e8ff", padding: "24px 16px",
+          color: "#f0e8ff", padding: "20px 14px",
         }}>
-          {/* Header */}
-          <div style={{ textAlign: "center", marginBottom: 28 }}>
-            <div style={{ fontSize: 11, letterSpacing: 4, color: "#a855f7", marginBottom: 6 }}>学マス</div>
-            <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0, color: "#fff", textShadow: "0 0 20px rgba(168,85,247,0.6)" }}>
-              コンテストメモリー<br />確定抽選チェッカー
+          <style>{`
+            @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&display=swap');
+            * { box-sizing: border-box; }
+            button, select { cursor: pointer; }
+            ::-webkit-scrollbar { width: 4px; }
+            ::-webkit-scrollbar-track { background: rgba(255,255,255,0.04); }
+            ::-webkit-scrollbar-thumb { background: rgba(168,85,247,0.4); border-radius: 2px; }
+          `}</style>
+
+          <div style={{ textAlign: "center", marginBottom: 22 }}>
+            <div style={{ fontSize: 10, letterSpacing: 4, color: "#a855f7", marginBottom: 4 }}>学マス</div>
+            <h1 style={{ fontSize: 20, fontWeight: 700, margin: 0, color: "#fff", textShadow: "0 0 20px rgba(168,85,247,0.6)" }}>
+              コンテストメモリー<br />振り分け最適化チェッカー
             </h1>
-            <p style={{ fontSize: 12, color: "#9080b0", marginTop: 8 }}>
-              固有枠を除いた自由枠5枚で確定抽選を確認・自由枠の組み合わせを提案
+            <p style={{ fontSize: 11, color: "#9080b0", marginTop: 6 }}>
+              指定カードをセット間で振り分け、取り放題セットを最大化
             </p>
           </div>
 
-          <div style={{ maxWidth: 700, margin: "0 auto" }}>
-
-            {/* ① ランク選択 */}
-            <Section label="① プロデュースクリアランク">
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-                {RANKS.map((r) => (
-                  <button key={r.id} className="rank-btn"
-                    onClick={() => { setRankId(r.id); setShowAllCombos(false); setExpandedComboIdx(null); setPrioritizeSafe(true); }}
-                    style={{
-                      padding: "6px 14px", borderRadius: 20,
-                      border: rankId === r.id ? "2px solid #a855f7" : "2px solid rgba(255,255,255,0.1)",
-                      background: rankId === r.id ? "rgba(168,85,247,0.25)" : "rgba(255,255,255,0.04)",
-                      color: rankId === r.id ? "#e0b0ff" : "#9080b0",
-                      fontSize: 13, fontWeight: rankId === r.id ? 700 : 400,
-                    }}>
-                    {r.label}
-                    {r.note && <span style={{ fontSize: 9, marginLeft: 3, opacity: 0.6 }}>*</span>}
-                  </button>
-                ))}
-              </div>
-              <div style={{ marginTop: 10, fontSize: 12, color: "#6060a0" }}>
-                コスト範囲：<span style={{ color: "#c0a0ff" }}>{rank.min} 〜 {rank.max}</span>
-                {rank.note && <span style={{ fontSize: 10, marginLeft: 6, color: "#806090" }}>({rank.note})</span>}
-              </div>
-            </Section>
-
-            {/* ② スキル枠 */}
-            <Section label={`② スキル枠の設定（${slots.length} / ${SLOT_LIMIT}枚）`}>
-              <div style={{
-                display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 12,
-                padding: "8px 12px", background: "rgba(255,255,255,0.03)",
-                borderRadius: 8, fontSize: 11, color: "#7060a0",
-              }}>
-                <span>💡 <strong style={{ color: "#c0a0ff" }}>指定しない枠</strong>が自由枠として提案対象になります</span>
-                <span style={{ color: "#6b7280" }}>※ サポカは全体で1枚まで</span>
-              </div>
-
-              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                {slots.map((slot, i) => {
-                  const col = rarityColor[slot.rarityId] || rarityColor["low_silver"];
-                  const cost = getCost(slot.rarityId, slot.enhanced);
+          <div style={{ maxWidth: 680, margin: "0 auto" }}>
+            <Section label="① 指定カード（セット間で分配する枚数を指定）">
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {pool.map((p) => {
+                  const col = rarityColor[p.rarityId] || { solid: "#6b7280" };
                   return (
-                    <div key={slot.id} className="slot-card" style={{
-                      display: "flex", alignItems: "center", gap: 10,
-                      background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.1)",
-                      borderRadius: 12, padding: "10px 14px",
+                    <div key={p.id} style={{
+                      display: "flex", alignItems: "center", gap: 8,
+                      background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)",
+                      borderRadius: 10, padding: "8px 12px",
                     }}>
-                      <div style={{
-                        width: 26, height: 26, borderRadius: 7, flexShrink: 0,
-                        background: col.bg, display: "flex", alignItems: "center",
-                        justifyContent: "center", fontSize: 11, fontWeight: 700,
-                        color: "#fff", border: `2px solid ${col.border}`,
-                      }}>{i + 1}</div>
-                      <select value={slot.rarityId}
-                        onChange={(e) => {
-                          const newRarity = e.target.value;
-                          updateSlot(slot.id, { rarityId: newRarity, ...(newRarity === "support" ? { enhanced: false } : {}) });
-                        }}
+                      <div style={{ width: 9, height: 9, borderRadius: "50%", flexShrink: 0, background: col.solid }} />
+                      <select value={p.rarityId}
+                        onChange={(e) => updatePool(p.id, { rarityId: e.target.value })}
                         style={{
                           flex: 1, minWidth: 0, background: "rgba(0,0,0,0.4)", color: "#f0e8ff",
-                          border: "1px solid rgba(255,255,255,0.12)", borderRadius: 8,
-                          padding: "5px 8px", fontSize: 13,
+                          border: "1px solid rgba(255,255,255,0.12)", borderRadius: 7,
+                          padding: "4px 6px", fontSize: 12,
                         }}>
-                        {RARITIES.map((r) => {
-                          const disabled = r.id === "support" && !canSelectSupport(slot.id);
-                          return (
-                            <option key={r.id} value={r.id} disabled={disabled}>
-                              {r.label}（{r.sublabel}）{disabled ? " ─ 他の枠で使用中" : ""}
-                            </option>
-                          );
-                        })}
+                        {RARITIES.map((r) => (
+                          <option key={r.id} value={r.id}>{r.label}（{r.sublabel}）</option>
+                        ))}
                       </select>
-                      <button onClick={() => updateSlot(slot.id, { enhanced: !slot.enhanced })}
-                        disabled={slot.rarityId === "support"}
+                      <button onClick={() => updatePool(p.id, { enhanced: !p.enhanced })}
                         style={{
-                          padding: "4px 10px", borderRadius: 8, flexShrink: 0,
-                          border: slot.enhanced ? "1px solid #f59e0b" : "1px solid rgba(255,255,255,0.12)",
-                          background: slot.enhanced ? "rgba(245,158,11,0.2)" : "rgba(255,255,255,0.04)",
-                          color: slot.rarityId === "support" ? "#403050" : slot.enhanced ? "#f59e0b" : "#6060a0",
-                          fontSize: 12, fontWeight: slot.enhanced ? 700 : 400,
-                          opacity: slot.rarityId === "support" ? 0.4 : 1,
-                        }}>
-                        {slot.enhanced ? "強化+" : "未強化"}
-                      </button>
-                      <div style={{ width: 44, textAlign: "right", fontSize: 14, fontWeight: 700, color: "#c0a0ff", flexShrink: 0 }}>
-                        {cost}
+                          padding: "4px 10px", borderRadius: 7, flexShrink: 0, fontSize: 12,
+                          border: p.enhanced ? "1px solid #f59e0b" : "1px solid rgba(255,255,255,0.12)",
+                          background: p.enhanced ? "rgba(245,158,11,0.2)" : "rgba(255,255,255,0.04)",
+                          color: p.enhanced ? "#f59e0b" : "#6060a0", fontWeight: p.enhanced ? 700 : 400,
+                        }}>{p.enhanced ? "+" : "−"}</button>
+                      <div style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
+                        <button onClick={() => updatePool(p.id, { count: Math.max(1, p.count - 1) })}
+                          style={{ width: 22, height: 22, borderRadius: 6, border: "1px solid rgba(255,255,255,0.12)",
+                            background: "rgba(255,255,255,0.04)", color: "#9080b0", fontSize: 14 }}>−</button>
+                        <div style={{ width: 20, textAlign: "center", fontSize: 13, fontWeight: 700, color: "#c0a0ff" }}>
+                          {p.count}
+                        </div>
+                        <button onClick={() => updatePool(p.id, { count: Math.min(sets.length * 5, p.count + 1) })}
+                          style={{ width: 22, height: 22, borderRadius: 6, border: "1px solid rgba(255,255,255,0.12)",
+                            background: "rgba(255,255,255,0.04)", color: "#9080b0", fontSize: 14 }}>＋</button>
                       </div>
-                      <button onClick={() => removeSlot(slot.id)} style={{
-                        width: 24, height: 24, borderRadius: "50%", flexShrink: 0,
+                      <div style={{ width: 32, textAlign: "right", fontSize: 11, color: "#7060a0", flexShrink: 0 }}>
+                        {getCost(p.rarityId, p.enhanced)}
+                      </div>
+                      <button onClick={() => removePool(p.id)} style={{
+                        width: 22, height: 22, borderRadius: "50%", flexShrink: 0,
                         border: "1px solid rgba(255,80,80,0.3)", background: "rgba(255,80,80,0.08)",
-                        color: "#ff6060", fontSize: 14,
-                        display: "flex", alignItems: "center", justifyContent: "center",
+                        color: "#ff6060", fontSize: 13, display: "flex", alignItems: "center", justifyContent: "center",
                       }}>×</button>
                     </div>
                   );
                 })}
               </div>
+              <button onClick={addPool} style={{
+                marginTop: 8, width: "100%", padding: "8px",
+                border: "2px dashed rgba(168,85,247,0.3)", borderRadius: 10,
+                background: "transparent", color: "#8060c0", fontSize: 12,
+              }}>＋ カードを追加</button>
 
-              {slots.length < SLOT_LIMIT && (
-                <button onClick={addSlot} style={{
-                  marginTop: 10, width: "100%", padding: "9px",
-                  border: "2px dashed rgba(168,85,247,0.3)", borderRadius: 12,
-                  background: "transparent", color: "#8060c0", fontSize: 13,
-                }}>＋ 枠を追加</button>
-              )}
-
-              <div style={{ marginTop: 10, display: "flex", gap: 16, flexWrap: "wrap", fontSize: 12, color: "#6060a0" }}>
-                <span>固定枠コスト：<strong style={{ color: "#c0a0ff" }}>{analysis.fixedTotal}</strong></span>
-                <span>自由枠：<strong style={{ color: "#a855f7" }}>{analysis.freeCount}</strong> 枠</span>
-                {hasFixedSupport && <span style={{ color: "#06b6d4" }}>🔒 サポカ使用中（自由枠に出現しません）</span>}
+              <div style={{
+                marginTop: 10, display: "flex", gap: 14, flexWrap: "wrap",
+                fontSize: 12, padding: "8px 12px",
+                background: "rgba(255,255,255,0.03)", borderRadius: 8,
+              }}>
+                <span>指定合計：<strong style={{ color: "#c0a0ff" }}>{totalSpecified}</strong>枚</span>
+                <span>全スロット：<strong style={{ color: "#c0a0ff" }}>{totalSlots}</strong>枠</span>
+                <span style={{ color: isInvalid ? "#f87171" : totalFree === 0 ? "#f59e0b" : "#34d399", fontWeight: 700 }}>
+                  自由枠：{isInvalid ? "超過！" : totalFree}
+                  {!isInvalid && "枠"}
+                </span>
               </div>
+              {isInvalid && (
+                <div style={{ marginTop: 6, fontSize: 12, color: "#f87171", padding: "6px 10px",
+                  background: "rgba(248,113,113,0.08)", borderRadius: 8, border: "1px solid rgba(248,113,113,0.2)" }}>
+                  ⚠️ 指定カードの合計（{totalSpecified}枚）がセット数×5（{totalSlots}枠）を超えています
+                </div>
+              )}
             </Section>
 
-            {/* ③ 結果 */}
-            {slots.length > 0 && (
-              <Section label="③ 判定結果">
-                {analysis.freeCount === 0 && (
-                  <>
+            <Section label={`② セット設定（${sets.length} / ${MAX_SETS}）`}>
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {sets.map((set, i) => (
+                  <div key={set.id} style={{
+                    display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap",
+                    background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.08)",
+                    borderRadius: 10, padding: "10px 12px",
+                  }}>
                     <div style={{
-                      background: "rgba(255,255,255,0.04)", borderRadius: 12,
-                      padding: "14px 18px", marginBottom: 14,
-                      border: `2px solid ${analysis.inRange ? "rgba(52,211,153,0.4)" : "rgba(248,113,113,0.4)"}`,
-                    }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-                        <span style={{ fontSize: 13, color: "#9080b0" }}>合計コスト</span>
-                        <div style={{ fontSize: 26, fontWeight: 700, color: analysis.inRange ? "#34d399" : "#f87171" }}>
-                          {analysis.fixedTotal}
-                          <span style={{ fontSize: 13, color: "#9080b0", marginLeft: 6 }}>/ {rank.min}〜{rank.max}</span>
-                        </div>
-                      </div>
-                      <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 14, fontWeight: 700, color: analysis.inRange ? "#34d399" : "#f87171" }}>
-                        <span style={{ fontSize: 18 }}>{analysis.inRange ? "✓" : "✗"}</span>
-                        {analysis.inRange
-                          ? `この組み合わせはコスト範囲内です（${rankId}ランク）`
-                          : analysis.tooLow ? `コストが下限（${rank.min}）を下回っています` : `コストが上限（${rank.max}）を超えています`}
-                      </div>
+                      width: 22, height: 22, borderRadius: 6, flexShrink: 0,
+                      background: "rgba(168,85,247,0.2)", border: "1px solid rgba(168,85,247,0.35)",
+                      display: "flex", alignItems: "center", justifyContent: "center",
+                      fontSize: 11, fontWeight: 700, color: "#c084fc",
+                    }}>{i + 1}</div>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 4, flex: 1 }}>
+                      {RANKS.map((r) => (
+                        <button key={r.id} onClick={() => updateSet(set.id, { rankId: r.id })}
+                          style={{
+                            padding: "4px 10px", borderRadius: 16, fontSize: 11,
+                            border: set.rankId === r.id ? "2px solid #a855f7" : "2px solid rgba(255,255,255,0.1)",
+                            background: set.rankId === r.id ? "rgba(168,85,247,0.25)" : "rgba(255,255,255,0.04)",
+                            color: set.rankId === r.id ? "#e0b0ff" : "#9080b0",
+                            fontWeight: set.rankId === r.id ? 700 : 400,
+                          }}>
+                          {r.label}{r.note ? <span style={{ fontSize: 8, opacity: 0.6 }}>*</span> : null}
+                        </button>
+                      ))}
                     </div>
-                    {analysis.inRange && (
-                      <div style={{ background: "rgba(168,85,247,0.08)", borderRadius: 12, padding: "12px 18px", marginBottom: 14, border: "1px solid rgba(168,85,247,0.2)" }}>
-                        <div style={{ fontSize: 12, color: "#9080b0", marginBottom: 4 }}>猶予コスト</div>
-                        <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
-                          <span style={{ fontSize: 28, fontWeight: 700, color: "#c084fc" }}>{analysis.yoyoCost}</span>
-                          <span style={{ fontSize: 12, color: "#7060a0" }}>= 下限{rank.min} −（{analysis.fixedTotal} − {analysis.minCost}）</span>
-                        </div>
-                        <div style={{ fontSize: 12, color: "#8070a0", marginTop: 4 }}>コスト {analysis.yoyoCost} 未満のカードを取っても確定が崩れません</div>
-                      </div>
+                    {sets.length > 1 && (
+                      <button onClick={() => removeSet(set.id)} style={{
+                        width: 22, height: 22, borderRadius: "50%", flexShrink: 0,
+                        border: "1px solid rgba(255,80,80,0.3)", background: "rgba(255,80,80,0.08)",
+                        color: "#ff6060", fontSize: 13, display: "flex", alignItems: "center", justifyContent: "center",
+                      }}>×</button>
                     )}
-                    {analysis.inRange && (
-                      <>
-                        <CardList title="✅ 取り放題カード" color="#34d399" bg="rgba(52,211,153,0.06)" cards={safeCards} />
-                        <CardList title="⛔ 取ると確定が崩れるカード" color="#f87171" bg="rgba(248,113,113,0.06)" cards={dangerCards} />
-                      </>
-                    )}
-                  </>
+                  </div>
+                ))}
+              </div>
+              {sets.length < MAX_SETS && (
+                <button onClick={addSet} style={{
+                  marginTop: 8, width: "100%", padding: "8px",
+                  border: "2px dashed rgba(168,85,247,0.3)", borderRadius: 10,
+                  background: "transparent", color: "#8060c0", fontSize: 12,
+                }}>＋ セットを追加</button>
+              )}
+            </Section>
+
+            {!isInvalid && searchResult && (
+              <Section label="③ 振り分けパターン（取り放題セット数 降順）">
+                {searchResult.capped && (
+                  <div style={{ marginBottom: 8, fontSize: 11, color: "#f59e0b", padding: "6px 10px",
+                    background: "rgba(245,158,11,0.08)", borderRadius: 8, border: "1px solid rgba(245,158,11,0.2)" }}>
+                    ⚠️ 分配パターンが多いため上限{DIST_CAP}件で打ち切り（参考値）
+                  </div>
                 )}
-
-                {analysis.freeCount > 0 && (
-                  <div style={{ background: "rgba(255,255,255,0.03)", borderRadius: 14, border: "1px solid rgba(168,85,247,0.2)", overflow: "hidden" }}>
-                    <div style={{ padding: "14px 18px", borderBottom: "1px solid rgba(255,255,255,0.06)", display: "flex", justifyContent: "space-between", alignItems: "center", background: "rgba(168,85,247,0.06)" }}>
-                      <div>
-                        <div style={{ fontSize: 13, fontWeight: 700, color: "#c084fc" }}>
-                          自由枠（{analysis.freeCount}枠）に入れると確定する組み合わせ
-                        </div>
-                        <div style={{ fontSize: 12, color: "#6060a0", marginTop: 2 }}>
-                          固定コスト {analysis.fixedTotal} ＋ 自由枠合計 → {rank.min}〜{rank.max}
-                          {hasFixedSupport && "　※ サポカは除外"}
-                        </div>
-                      </div>
-                      <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6, flexShrink: 0 }}>
-                        <div style={{
-                          background: analysis.freeCombos.length > 0 ? "rgba(168,85,247,0.25)" : "rgba(248,113,113,0.2)",
-                          color: analysis.freeCombos.length > 0 ? "#e0b0ff" : "#f87171",
-                          borderRadius: 20, padding: "4px 14px", fontSize: 14, fontWeight: 700,
-                        }}>{analysis.freeCombos.length} 件</div>
-                        {analysis.freeCombos.some((c) => c.safeCards.length > 0) && (
-                          <button onClick={() => { setPrioritizeSafe(!prioritizeSafe); setExpandedComboIdx(null); }}
-                            style={{
-                              padding: "4px 10px", borderRadius: 10, fontSize: 11, fontWeight: 700,
-                              border: prioritizeSafe ? "1px solid rgba(52,211,153,0.6)" : "1px solid rgba(255,255,255,0.12)",
-                              background: prioritizeSafe ? "rgba(52,211,153,0.15)" : "rgba(255,255,255,0.04)",
-                              color: prioritizeSafe ? "#34d399" : "#7060a0", whiteSpace: "nowrap",
-                            }}>
-                            {prioritizeSafe ? "✅ 取り放題優先" : "取り放題優先"}
-                          </button>
-                        )}
-                      </div>
-                    </div>
-
-                    {analysis.freeCombos.length === 0 ? (
-                      <div style={{ padding: "28px", textAlign: "center", color: "#f87171", fontSize: 13, lineHeight: 1.8 }}>
-                        ⚠️ 固定枠のコスト（{analysis.fixedTotal}）では<br />コスト範囲内に収める組み合わせがありません
-                      </div>
-                    ) : (
-                      <>
-                        <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "7px 18px", fontSize: 11, color: "#504060", borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
-                          <div style={{ width: 24, flexShrink: 0, textAlign: "right" }}>#</div>
-                          <div style={{ flex: 1, minWidth: 0 }}>自由枠の構成</div>
-                          <div style={{ display: "flex", gap: 8, alignItems: "center", marginLeft: "auto", paddingLeft: 8 }}>
-                            <div style={{ width: 74, textAlign: "center" }}>取り放題</div>
-                            <div style={{ minWidth: 52, textAlign: "right" }}>合計</div>
-                            <div style={{ width: 14 }} />
+                <div style={{ fontSize: 11, color: "#6060a0", marginBottom: 10 }}>
+                  探索した分配パターン：{searchResult.total}件
+                  　濃いカードバッジ＝指定カード、薄いカードバッジ＝自由枠の推奨
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                  {displayed?.map((result, ri) => {
+                    const isOpen = openResultIdx === ri;
+                    return (
+                      <div key={ri} style={{
+                        background: "rgba(255,255,255,0.03)",
+                        border: `1px solid ${result.safeCount === sets.length ? "rgba(52,211,153,0.3)" : result.safeCount > 0 ? "rgba(168,85,247,0.2)" : "rgba(255,255,255,0.06)"}`,
+                        borderRadius: 12, overflow: "hidden",
+                      }}>
+                        <div onClick={() => setOpenResultIdx(isOpen ? null : ri)}
+                          style={{
+                            display: "flex", alignItems: "center", gap: 10, padding: "12px 16px",
+                            cursor: "pointer", background: result.safeCount === sets.length
+                              ? "rgba(52,211,153,0.05)" : "rgba(168,85,247,0.03)",
+                          }}>
+                          <div style={{ fontSize: 11, color: "#504060", flexShrink: 0, width: 22, textAlign: "right" }}>
+                            {ri + 1}
                           </div>
-                        </div>
-
-                        <div style={{ maxHeight: 420, overflowY: "auto", overflowX: "hidden" }}>
-                          {displayedCombos.map((combo, idx) => {
-                            const isExpanded = expandedComboIdx === idx;
-                            const hasSafe = combo.safeCards.length > 0;
-                            const grayed = combo.grayed;
-                            return (
-                              <div key={idx} style={{
-                                borderBottom: "1px solid rgba(255,255,255,0.035)",
-                                opacity: grayed ? 0.35 : 1,
-                                background: isExpanded ? "rgba(168,85,247,0.08)" : idx % 2 === 0 ? "transparent" : "rgba(255,255,255,0.012)",
-                              }}>
-                                <div className="combo-row"
-                                  onClick={() => setExpandedComboIdx(isExpanded ? null : idx)}
-                                  style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 18px", cursor: "pointer", width: "100%", overflow: "hidden" }}>
-                                  <div style={{ width: 24, fontSize: 11, color: "#504070", flexShrink: 0, textAlign: "right" }}>{idx + 1}</div>
-                                  <div style={{ flex: 1, minWidth: 0, display: "flex", flexWrap: "wrap", gap: 5 }}>
-                                    {combo.cards.map((card, ci) => {
-                                      const col = rarityColor[card.rarityId];
-                                      return (
-                                        <span key={ci} style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "3px 9px", borderRadius: 16, background: "rgba(0,0,0,0.3)", border: `1px solid ${col.border}50`, fontSize: 12, whiteSpace: "nowrap" }}>
-                                          <span style={{ width: 7, height: 7, borderRadius: "50%", flexShrink: 0, background: col.solid, display: "inline-block" }} />
-                                          <span style={{ color: "#d0c0f0" }}>{card.label}{card.enhanced ? "+" : "−"}</span>
-                                          <span style={{ color: "#605080", fontSize: 11 }}>{card.cost}</span>
-                                        </span>
-                                      );
-                                    })}
-                                  </div>
-                                  <div style={{ flexShrink: 0, display: "flex", alignItems: "center", gap: 8, marginLeft: "auto", paddingLeft: 8 }}>
-                                    <div style={{ visibility: hasSafe ? "visible" : "hidden", background: "rgba(52,211,153,0.15)", border: "1px solid rgba(52,211,153,0.35)", borderRadius: 10, padding: "2px 7px", fontSize: 10, color: "#34d399", whiteSpace: "nowrap", textAlign: "center", width: 74 }}>
-                                      取り放題あり
-                                    </div>
-                                    <div style={{ textAlign: "right", minWidth: 52 }}>
-                                      <div style={{ fontSize: 14, fontWeight: 700, color: "#c0a0ff" }}>{combo.total}</div>
-                                      <div style={{ fontSize: 10, color: "#504060" }}>+{combo.comboSum}</div>
-                                    </div>
-                                    <div style={{ fontSize: 12, color: "#604080", width: 14, textAlign: "center" }}>{isExpanded ? "▲" : "▼"}</div>
-                                  </div>
+                          <div style={{ flexShrink: 0 }}>
+                            <div style={{ fontSize: 18, fontWeight: 700,
+                              color: result.safeCount === sets.length ? "#34d399" : result.safeCount > 0 ? "#f59e0b" : "#7060a0" }}>
+                              {result.safeCount}<span style={{ fontSize: 11, color: "#6060a0", fontWeight: 400 }}>/ {sets.length}</span>
+                            </div>
+                            <div style={{ fontSize: 9, color: "#6060a0" }}>取り放題</div>
+                          </div>
+                          <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 4 }}>
+                            {result.setEvals.map((ev, si) => (
+                              <div key={si} style={{ display: "flex", alignItems: "flex-start", gap: 6 }}>
+                                <span style={{
+                                  fontSize: 10, color: ev.evalResult.hasSafe ? "#34d399" : "#7060a0",
+                                  flexShrink: 0, width: 10, paddingTop: 2,
+                                }}>{ev.evalResult.hasSafe ? "✓" : "·"}</span>
+                                <div style={{ flex: 1, minWidth: 0, display: "flex", flexWrap: "wrap", gap: 3 }}>
+                                  {ev.fixedCards.length > 0
+                                    ? ev.fixedCards.map((c, ci) => (
+                                        <CardBadge key={ci} rarityId={c.rarityId} enhanced={c.enhanced} small />
+                                      ))
+                                    : <span style={{ fontSize: 10, color: "#403050" }}>（全枠自由）</span>
+                                  }
                                 </div>
-
-                                {isExpanded && (
-                                  <div style={{ margin: "0 14px 10px", borderRadius: 10, border: hasSafe ? "1px solid rgba(52,211,153,0.25)" : "1px solid rgba(255,255,255,0.06)", background: hasSafe ? "rgba(52,211,153,0.05)" : "rgba(255,255,255,0.02)", padding: "10px 14px" }}>
-                                    <div style={{ fontSize: 11, fontWeight: 700, marginBottom: 8, color: hasSafe ? "#34d399" : "#604070" }}>
-                                      {hasSafe ? "✅ 取り放題カード（確定が崩れない）" : "⚠️ 取り放題カードなし"}
-                                    </div>
-                                    {hasSafe && (
-                                      <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-                                        {combo.safeCards.map((c) => {
-                                          const col = rarityColor[c.rarityId];
-                                          return (
-                                            <div key={`${c.rarityId}-${c.enhanced}`} style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "4px 10px", borderRadius: 20, background: "rgba(0,0,0,0.3)", border: `1px solid ${col.border}60`, fontSize: 12, whiteSpace: "nowrap" }}>
-                                              <span style={{ display: "inline-block", width: 8, height: 8, borderRadius: "50%", background: col.solid, flexShrink: 0 }} />
-                                              <span style={{ color: "#d0c0f0" }}>{c.label}{c.enhanced ? "+" : "−"}</span>
-                                              <span style={{ color: "#7060a0", fontSize: 11 }}>{c.cost}</span>
-                                            </div>
-                                          );
-                                        })}
-                                      </div>
-                                    )}
-                                  </div>
-                                )}
+                                <span style={{ fontSize: 10, color: "#7060a0", flexShrink: 0, paddingTop: 2 }}>
+                                  {ev.evalResult.best?.total ?? "−"}
+                                </span>
                               </div>
-                            );
-                          })}
+                            ))}
+                          </div>
+                          <div style={{ flexShrink: 0, fontSize: 12, color: "#604080" }}>
+                            {isOpen ? "▲" : "▼"}
+                          </div>
                         </div>
 
-                        {analysis.freeCombos.length > COMBO_PREVIEW && (
-                          <div style={{ padding: "12px", textAlign: "center", borderTop: "1px solid rgba(255,255,255,0.05)" }}>
-                            <button onClick={() => setShowAllCombos(!showAllCombos)} style={{ padding: "7px 22px", borderRadius: 20, border: "1px solid rgba(168,85,247,0.4)", background: "rgba(168,85,247,0.1)", color: "#c084fc", fontSize: 13 }}>
-                              {showAllCombos ? "▲ 折りたたむ" : `▼ 残り ${analysis.freeCombos.length - COMBO_PREVIEW} 件を表示`}
-                            </button>
+                        {isOpen && (
+                          <div style={{ borderTop: "1px solid rgba(255,255,255,0.05)" }}>
+                            {result.setEvals.map((ev, si) => (
+                              <SetResultRow
+                                key={si}
+                                label={si + 1}
+                                fixedCards={ev.fixedCards}
+                                evalResult={ev.evalResult}
+                                rank={ev.rank}
+                              />
+                            ))}
                           </div>
                         )}
-                      </>
-                    )}
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {(searchResult?.results?.length ?? 0) > RESULT_PREVIEW && (
+                  <div style={{ marginTop: 10, textAlign: "center" }}>
+                    <button onClick={() => setShowAll(!showAll)} style={{
+                      padding: "7px 22px", borderRadius: 20,
+                      border: "1px solid rgba(168,85,247,0.4)",
+                      background: "rgba(168,85,247,0.1)", color: "#c084fc", fontSize: 12,
+                    }}>
+                      {showAll ? "▲ 折りたたむ" : `▼ 残り ${searchResult.results.length - RESULT_PREVIEW} パターンを表示`}
+                    </button>
                   </div>
                 )}
               </Section>
             )}
 
-            <div style={{ textAlign: "center", fontSize: 11, color: "#40305a", marginTop: 24, paddingBottom: 16 }}>
-              ※ SSS上限・下限は観測値。情報は随時更新される場合があります。
+            <div style={{ textAlign: "center", fontSize: 10, color: "#40305a", marginTop: 20, paddingBottom: 16 }}>
+              ※ SSS上限・下限は観測値。自由枠はサポカ除く全レアリティから選択。
             </div>
           </div>
         </div>
@@ -497,30 +673,11 @@
 
     function Section({ label, children }) {
       return (
-        <div style={{ marginBottom: 20 }}>
-          <div style={{ fontSize: 12, fontWeight: 700, color: "#8060c0", letterSpacing: 1, marginBottom: 10 }}>{label}</div>
-          {children}
-        </div>
-      );
-    }
-
-    function CardList({ title, color, bg, cards }) {
-      if (cards.length === 0) return null;
-      return (
-        <div style={{ background: bg, border: `1px solid ${color}30`, borderRadius: 12, padding: "12px 16px", marginBottom: 10 }}>
-          <div style={{ fontSize: 13, fontWeight: 700, color, marginBottom: 10 }}>{title}</div>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-            {cards.map((c) => {
-              const col = rarityColor[c.rarityId];
-              return (
-                <div key={`${c.rarityId}-${c.enhanced}`} style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "4px 10px", borderRadius: 20, background: "rgba(0,0,0,0.3)", border: `1px solid ${col.border}60`, fontSize: 12 }}>
-                  <span style={{ display: "inline-block", width: 8, height: 8, borderRadius: "50%", background: col.solid, flexShrink: 0 }} />
-                  <span style={{ color: "#d0c0f0" }}>{c.label}{c.enhanced ? "+" : "−"}</span>
-                  <span style={{ color: "#7060a0", fontSize: 11 }}>{c.cost}</span>
-                </div>
-              );
-            })}
+        <div style={{ marginBottom: 18 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: "#8060c0", letterSpacing: 1, marginBottom: 8 }}>
+            {label}
           </div>
+          {children}
         </div>
       );
     }

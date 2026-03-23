@@ -134,7 +134,7 @@
 
     // ── 分配パターン生成 ──────────────────────────────
     // poolCards: [{rarityId, enhanced, cost, count}, ...]
-    // 戻り値: 各分配パターン（各セットのカード配列の配列）
+    // 戻り値: { distributions: 分配パターン配列, capped: 上限到達フラグ }
     function generateDistributions(poolCards, numSets, cap) {
       const results = [];
       let capped = false;
@@ -401,7 +401,7 @@
           generated.distributions,
           sets
         );
-        const capped = generated.capped;
+        const capped = generated.capped || generated.distributions.length >= DIST_CAP;
 
         const ranked = distributions.map((dist) => {
           const setEvals = sets.map((set, i) => {

@@ -137,9 +137,13 @@
     // 戻り値: 各分配パターン（各セットのカード配列の配列）
     function generateDistributions(poolCards, numSets, cap) {
       const results = [];
+      let capped = false;
 
       function rec(cardIdx, dist) {
-        if (results.length >= cap) return;
+        if (results.length >= cap) {
+          capped = true;
+          return;
+        }
         if (cardIdx === poolCards.length) {
           results.push(dist.map((s) => [...s]));
           return;
@@ -149,7 +153,10 @@
         const isSupport = card.rarityId === "support";
 
         function distCard(remaining, setIdx, d) {
-          if (results.length >= cap) return;
+          if (results.length >= cap) {
+            capped = true;
+            return;
+          }
           if (setIdx === numSets) {
             if (remaining === 0) rec(cardIdx + 1, d);
             return;
@@ -168,7 +175,7 @@
       }
 
       rec(0, Array.from({ length: numSets }, () => []));
-      return results;
+      return { distributions: results, capped };
     }
 
     // ── セット入れ替わり重複の除去 ────────────────────
@@ -389,11 +396,12 @@
           count: p.count,
         }));
 
+        const generated = generateDistributions(poolCards, sets.length, DIST_CAP);
         const distributions = deduplicateDistributions(
-          generateDistributions(poolCards, sets.length, DIST_CAP),
+          generated.distributions,
           sets
         );
-        const capped = distributions.length >= DIST_CAP;
+        const capped = generated.capped;
 
         const ranked = distributions.map((dist) => {
           const setEvals = sets.map((set, i) => {

@@ -1,0 +1,51 @@
+name: export-rust-toolchain
+
+on:
+  push:
+    branches:
+      - tmp/export-rust-toolchain-20260831
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Prepare toolchain bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustc --version
+          cargo --version
+          mkdir -p /tmp/gakumas-deps/src
+          cat > /tmp/gakumas-deps/Cargo.toml <<'EOF'
+          [package]
+          name = "gakumas-deps"
+          version = "0.0.0"
+          edition = "2021"
+
+          [dependencies]
+          serde = { version = "1", features = ["derive"] }
+          serde_json = "1"
+          EOF
+          printf 'fn main() {}\n' > /tmp/gakumas-deps/src/main.rs
+          cargo fetch --manifest-path /tmp/gakumas-deps/Cargo.toml
+          SYSROOT="$(rustc --print sysroot)"
+          mkdir -p bundle/toolchain bundle/cargo-home
+          cp -a "$SYSROOT/bin" bundle/toolchain/
+          cp -a "$SYSROOT/lib" bundle/toolchain/
+          cp -a "$HOME/.cargo/registry" bundle/cargo-home/
+          if [ -d "$HOME/.cargo/git" ]; then cp -a "$HOME/.cargo/git" bundle/cargo-home/; fi
+          rustc -vV > bundle/version.txt
+          cargo --version >> bundle/version.txt
+          tar -C bundle -czf rust-local-toolchain.tar.gz toolchain cargo-home version.txt
+          ls -lh rust-local-toolchain.tar.gz
+      - name: Upload toolchain artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rust-local-toolchain-linux-x86_64
+          path: rust-local-toolchain.tar.gz
+          if-no-files-found: error
+          retention-days: 1
